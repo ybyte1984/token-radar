@@ -35,7 +35,10 @@
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
-    var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
+    // Same cap as the model: maturity never exceeds floor + range, whatever
+    // the age, so the page's recompute always agrees with board.json.
+    var maturity = Math.min(model.maturity_floor + model.maturity_range,
+      model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range);
     var chainMult = 1 + Math.min(Math.max((row.chains || []).length - 1, 0), model.chain_cap) * model.chain_step;
     return Math.max(1, Math.round(row.tvl_usd * model.base_multiple * growthMult * maturity * row.category_multiplier * chainMult));
   }
@@ -268,7 +271,10 @@
         el('button', { class: 'button primary', type: 'button', text: 'Clear filters', onclick: function () { state.q = ''; state.category = 'all'; state.chain = 'all'; state.minTvl = 0; state.watchlistOnly = false; writeHash(); render(); } })
       ));
     }
-    var max = list[0].implied_value_usd || 1;
+    // Bars scale to the rank-1 implied value, not to whatever row the
+    // current sort puts first — otherwise sorting by name would rescale
+    // every bar to a mid-board value.
+    var max = DATA.rows[0].implied_value_usd || 1;
     var tbody = el('tbody');
     list.forEach(function (r) {
       var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);

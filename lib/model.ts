@@ -9,7 +9,11 @@
 // protocol's name. For a protocol with TVL T, seven-day change g and age a:
 //
 //   base        = T x 0.30
-//   growth      = clamp(g, -50, +100)          (null growth counts as 0)
+//   growth      = clamp(g, -50, +100)          (null growth counts as 0;
+//                                                one week printed +4,448% in
+//                                                this snapshot, so the clamp
+//                                                is what keeps a small base
+//                                                from dominating the board)
 //   growthMult  = 1 + growth / 100 x 0.60
 //   maturity    = 0.55 + 0.45 x min(a, 1460) / 1460   (unknown age counts as 365d)
 //   category    = a risk multiplier by category (see CATEGORY_MULT)
@@ -211,8 +215,12 @@ export function impliedValue(
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
   const ageForModel = age ?? model.unknown_age_days;
-  const maturityMult =
-    model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
+  // Maturity is capped at the floor + the full range: a protocol listed
+  // before the four-year window earns no more than one listed four years in.
+  const maturityMult = Math.min(
+    model.maturity_floor + model.maturity_range,
+    model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range,
+  );
   const catGroup = categoryGroup(protocol.category);
   const catMult = CATEGORY_MULT[catGroup] ?? 0.95;
   const extraChains = Math.min(Math.max(protocol.chains.length - 1, 0), model.chain_cap);
@@ -511,6 +519,7 @@ export function parseSnapshot(text: string): Snapshot {
 
 export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
   const slugs = new Set(board.map((r) => r.slug));
+  if (slugs.size !== board.length) return `the board repeats a slug: ${board.length - slugs.size} duplicate row${board.length - slugs.size === 1 ? '' : 's'}`;
   const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
   if (missing.length > 0) return `the board misses ${missing.length} watchlist slug${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 5).join(', ')}`;
   const ranks = board.map((r) => r.rank).sort((a, b) => a - b);
