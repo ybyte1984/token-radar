@@ -123,6 +123,7 @@ export interface BoardRow {
   gecko_id: string | null;
   symbol: string | null;
   token_status: 'pre-token';
+  thesis: string | null;
   age_days: number | null;
   implied_value_usd: number;
   model: {
@@ -157,6 +158,7 @@ export interface RadarRow {
   category_multiplier: number;
   chain_multiplier: number;
   watchlist: boolean;
+  thesis: string | null;
 }
 
 export interface LiveRow {
@@ -167,6 +169,20 @@ export interface LiveRow {
   tvl_usd: number;
   mcap_usd: number | null;
   change_7d: number | null;
+}
+
+export interface CategorySummary {
+  category: string;
+  rows: number;
+  median_tvl_usd: number;
+  top_slug: string;
+  top_name: string;
+}
+
+export interface ChainSummary {
+  chain: string;
+  rows: number;
+  total_tvl_usd: number;
 }
 
 export interface RadarData {
@@ -181,6 +197,8 @@ export interface RadarData {
   live_size: number;
   rows: RadarRow[];
   live: LiveRow[];
+  category_map: CategorySummary[];
+  chain_map: ChainSummary[];
 }
 
 export class SnapshotError extends Error {
@@ -289,6 +307,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       gecko_id: s.p.gecko_id,
       symbol: s.p.symbol,
       token_status: 'pre-token',
+      thesis: snapshot.watchlist.includes(s.p.slug) ? thesisFor(s.p, snapshot.as_of, i + 1, implied) : null,
       age_days: s.age,
       implied_value_usd: implied,
       model: {
@@ -423,6 +442,104 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   ];
 }
 
+/** A whole-dollar figure in one short unit, for a sentence, not a table. */
+function shortUsd(n: number): string {
+  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return '$' + Math.round(n / 1e3) + 'K';
+  return '$' + Math.round(n);
+}
+
+function growthClause(raw: number | null): string {
+  if (raw === null) return 'its seven-day move is unreported';
+  if (raw > 0) return 'up ' + raw.toFixed(2) + '% over the last seven days';
+  if (raw < 0) return 'down ' + Math.abs(raw).toFixed(2) + '% over the last seven days';
+  return 'flat over the last seven days';
+}
+
+function ageClause(age: number | null): string {
+  if (age === null) return 'an unlisted age';
+  if (age >= 365) return 'more than a year with no token on record';
+  if (age >= 90) return Math.round(age / 30) + ' months with no token on record';
+  return 'only ' + age + ' days with no token on record';
+}
+
+/**
+ * One-line thesis for a watchlist row: what the protocol does, how big it
+ * is, which way it is moving, and why that puts it at its rank. Built only
+ * from the snapshot's own figures; the name is never special-cased.
+ */
+export function thesisFor(p: SnapshotProtocol, asOf: string, rank: number, implied: number): string {
+  const kind = p.category === null ? 'protocol' : p.category.toLowerCase() + ' protocol';
+  return (
+    p.name +
+    ' is a ' +
+    kind +
+    ' holding ' +
+    shortUsd(p.tvl_usd) +
+    ' of TVL, ' +
+    growthClause(p.change_7d) +
+    ', and ' +
+    ageClause(ageDays(asOf, p.listed_at)) +
+    ' — the scale and staying power behind rank ' +
+    rank +
+    ' and an implied launch value of ' +
+    shortUsd(implied) +
+    '.'
+  );
+}
+
+function medianOf(values: number[]): number {
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid]!;
+  return Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
+}
+
+/**
+ * Per-category map of the ranked board: how many rows each category holds,
+ * the median TVL inside it, and the category's top protocol by implied
+ * value. Ordered by row count, then by name, so the order is fixed.
+ */
+export function summarizeCategories(board: BoardRow[]): CategorySummary[] {
+  const groups = new Map<string, BoardRow[]>();
+  for (const row of board) {
+    const key = row.category ?? 'Other';
+    const list = groups.get(key);
+    if (list) list.push(row);
+    else groups.set(key, [row]);
+  }
+  const out = [...groups.entries()].map(([category, rows]) => ({
+    category,
+    rows: rows.length,
+    median_tvl_usd: medianOf(rows.map((r) => r.tvl_usd)),
+    top_slug: rows[0]!.slug,
+    top_name: rows[0]!.name,
+  }));
+  out.sort((a, b) => b.rows - a.rows || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  return out;
+}
+
+/**
+ * Per-chain map of the ranked board: how many rows touch each chain and the
+ * TVL they hold between them. A row on three chains counts once per chain.
+ * Ordered by total TVL, then by chain name, so the order is fixed.
+ */
+export function summarizeChains(board: BoardRow[]): ChainSummary[] {
+  const totals = new Map<string, { rows: number; tvl: number }>();
+  for (const row of board) {
+    for (const chain of row.chains.length > 0 ? row.chains : ['Unnamed']) {
+      const cur = totals.get(chain) ?? { rows: 0, tvl: 0 };
+      cur.rows += 1;
+      cur.tvl += row.tvl_usd;
+      totals.set(chain, cur);
+    }
+  }
+  const out = [...totals.entries()].map(([chain, v]) => ({ chain, rows: v.rows, total_tvl_usd: v.tvl }));
+  out.sort((a, b) => b.total_tvl_usd - a.total_tvl_usd || (a.chain < b.chain ? -1 : a.chain > b.chain ? 1 : 0));
+  return out;
+}
+
 export function liveRows(snapshot: Snapshot): LiveRow[] {
   return snapshot.protocols
     .filter((p) => !isPreToken(p) && p.category !== 'CEX')
@@ -458,6 +575,7 @@ export function radarRow(row: BoardRow, watchlist: boolean): RadarRow {
     category_multiplier: row.model.category_multiplier,
     chain_multiplier: row.model.chain_multiplier,
     watchlist,
+    thesis: row.thesis,
   };
 }
 
@@ -477,6 +595,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     rows: board.map((r) => radarRow(r, snapshot.watchlist.includes(r.slug))),
     live,
+    category_map: summarizeCategories(board),
+    chain_map: summarizeChains(board),
   };
   return { board, radar };
 }

@@ -214,6 +214,70 @@
     );
   }
 
+  function marketMap() {
+    if (!DATA.category_map || !DATA.chain_map) return null;
+    var cats = DATA.category_map.map(function (c) {
+      return el('button', {
+        type: 'button', class: 'map-card',
+        'aria-pressed': state.category === c.category ? 'true' : 'false',
+        onclick: function () {
+          state.category = state.category === c.category ? 'all' : c.category;
+          writeHash(); render();
+        }
+      },
+        el('b', { text: c.category }),
+        el('span', { class: 'sub', text: c.rows + (c.rows === 1 ? ' protocol' : ' protocols') + ' · median TVL ' + fmtUsd(c.median_tvl_usd) }),
+        el('span', { class: 'sub', text: 'Top: ' + c.top_name })
+      );
+    });
+    var chips = DATA.chain_map.map(function (c) {
+      return el('button', {
+        type: 'button', class: 'chip',
+        'aria-pressed': state.chain === c.chain ? 'true' : 'false',
+        onclick: function () {
+          state.chain = state.chain === c.chain ? 'all' : c.chain;
+          writeHash(); render();
+        }
+      }, c.chain + ' · ' + c.rows + ' · ' + fmtUsd(c.total_tvl_usd));
+    });
+    return el('section', { class: 'panel market-map', 'aria-label': 'Market map' },
+      el('h2', { text: 'Market map' }),
+      el('p', { class: 'sub', text: 'Where the pre-token board sits: pick a category or a chain to filter the board below.' }),
+      el('div', { class: 'map-grid' }, cats),
+      el('div', { class: 'chain-chips' }, chips)
+    );
+  }
+
+  function csvCell(v) {
+    var s = String(v === null || v === undefined ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function downloadCsv() {
+    var list = state.tab === 'pre-token' ? sortedRows(rows()) : DATA.live;
+    var lines = [['rank', 'name', 'category', 'chains', 'tvl_usd', 'change_7d', 'implied_value_usd'].join(',')];
+    list.forEach(function (r) {
+      lines.push([
+        state.tab === 'pre-token' ? r.rank : 'live',
+        csvCell(r.name),
+        csvCell(r.category || ''),
+        csvCell((r.chains || []).join('; ')),
+        r.tvl_usd,
+        r.change_7d === null || r.change_7d === undefined ? '' : r.change_7d,
+        state.tab === 'pre-token' ? r.implied_value_usd : (r.mcap_usd === null || r.mcap_usd === undefined ? '' : r.mcap_usd)
+      ].join(','));
+    });
+    var blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'token-radar.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
   function controls() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var chains = Array.from(new Set(DATA.rows.reduce(function (acc, r) { return acc.concat(r.chains || []); }, []))).sort();
@@ -249,6 +313,7 @@
       el('div', { class: 'field' }, el('label', { for: 'tvl', text: 'Min TVL' }), tvl),
       wl,
       el('div', { class: 'field' }, el('span', { class: 'sub', text: 'Token status' }), el('div', { class: 'tabs' }, pre, live)),
+      el('button', { class: 'button', type: 'button', text: 'Download CSV', onclick: downloadCsv }),
       el('span', { class: 'count', text: state.tab === 'pre-token' ? rows().length + ' rows shown' : DATA.live.length + ' live-token protocols' })
     );
   }
@@ -399,6 +464,7 @@
         el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'sub', text: whyItRanks(row) }),
+      row.thesis ? el('p', { class: 'thesis', text: row.thesis }) : null,
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price, and it says nothing about whether or when a token is issued.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
@@ -428,6 +494,8 @@
     var shell = el('div', { class: 'shell' });
     shell.appendChild(header());
     shell.appendChild(lede());
+    var map = marketMap();
+    if (map) shell.appendChild(map);
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());
